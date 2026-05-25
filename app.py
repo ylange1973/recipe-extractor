@@ -1,8 +1,13 @@
+import sys
+import logging
 from flask import Flask, request, jsonify
 import subprocess
 import os
 import re
 import tempfile
+
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -17,6 +22,8 @@ def extract():
     if not url:
         return jsonify({'error': 'url required'}), 400
 
+    logger.info(f"extract called with url: {url}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             result = subprocess.run([
@@ -27,20 +34,23 @@ def extract():
                 url
             ], capture_output=True, text=True, timeout=60)
 
-            print("yt-dlp stdout:", result.stdout[-500:] if result.stdout else "none")
-            print("yt-dlp stderr:", result.stderr[-500:] if result.stderr else "none")
-            print("yt-dlp returncode:", result.returncode)
+            logger.info(f"yt-dlp returncode: {result.returncode}")
+            logger.info(f"yt-dlp stdout: {result.stdout[-500:] if result.stdout else 'none'}")
+            logger.info(f"yt-dlp stderr: {result.stderr[-500:] if result.stderr else 'none'}")
 
             # Check for description file
             desc_file = os.path.join(tmpdir, 'media.description')
             if os.path.exists(desc_file):
                 with open(desc_file, 'r', encoding='utf-8') as f:
                     text = f.read().strip()
+                logger.info(f"description found, length: {len(text)}")
                 if text and len(text) > 100:
                     return jsonify({'text': text, 'method': 'description'})
 
             # Check for subtitle file
-            for f in os.listdir(tmpdir):
+            files = os.listdir(tmpdir)
+            logger.info(f"files in tmpdir: {files}")
+            for f in files:
                 if f.endswith('.vtt') or f.endswith('.srt'):
                     with open(os.path.join(tmpdir, f), 'r', encoding='utf-8') as sf:
                         raw = sf.read()
@@ -53,12 +63,14 @@ def extract():
                             seen.add(line)
                             clean.append(line)
                     text = ' '.join(clean)
+                    logger.info(f"subtitle text length: {len(text)}")
                     if text and len(text) > 100:
                         return jsonify({'text': text, 'method': 'transcript'})
 
         except Exception as e:
-            print("extract error:", str(e))
+            logger.error(f"extract error: {str(e)}")
 
+        logger.info("returning null result")
         return jsonify({'text': None, 'method': None})
 
 
@@ -73,6 +85,8 @@ def transcribe():
     if not openai_key:
         return jsonify({'error': 'OPENAI_API_KEY not set'}), 500
 
+    logger.info(f"transcribe called with url: {url}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             result = subprocess.run([
@@ -83,8 +97,8 @@ def transcribe():
                 url
             ], capture_output=True, text=True, timeout=120)
 
-            print("yt-dlp transcribe stdout:", result.stdout[-500:] if result.stdout else "none")
-            print("yt-dlp transcribe stderr:", result.stderr[-500:] if result.stderr else "none")
+            logger.info(f"yt-dlp transcribe returncode: {result.returncode}")
+            logger.info(f"yt-dlp transcribe stderr: {result.stderr[-500:] if result.stderr else 'none'}")
 
             audio_file = None
             for f in os.listdir(tmpdir):
@@ -105,7 +119,7 @@ def transcribe():
             return jsonify({'text': transcript, 'method': 'whisper'})
 
         except Exception as e:
-            print("transcribe error:", str(e))
+            logger.error(f"transcribe error: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
 
